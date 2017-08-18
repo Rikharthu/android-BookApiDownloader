@@ -20,7 +20,7 @@ public interface MaptService {
     @GET("products/{book_id}/metadata")
     Call<BaseResponse<BookMetadata>> getBookMetadata(@Path("book_id") long bookId);
 
-    @GET("users/me/products/{book_id}/chapters/{chapter_id}/sections/{section_id}")
-    Call<BaseResponse<Page>> getBookPage(@Path("book_id") long bookId, @Path("chapter_id") String chapterId, @Path("section_id") String sectionId,
+    @GET("users/me/products/{book_id}/chapters/{chapter_id}/{section_id}")
+    Call<BaseResponse<Page>> getBookPage(@Path("book_id") long bookId, @Path("chapter_id") String chapterId, @Path(value = "section_id") String sectionId,
                                          @Header("Authorization") String authHeader);
 }

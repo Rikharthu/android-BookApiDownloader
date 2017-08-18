@@ -1,10 +1,17 @@
 package com.example.uberv.maptbookapidownloader;
 
+import android.graphics.Bitmap;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.support.v4.util.Pair;
 import android.support.v7.app.AppCompatActivity;
+import android.text.TextUtils;
 import android.view.WindowManager;
+import android.widget.EditText;
+import android.widget.TextView;
 
 import com.example.uberv.maptbookapidownloader.Utils.AuthenticationUtils;
+import com.example.uberv.maptbookapidownloader.Utils.JsoupParser;
 import com.example.uberv.maptbookapidownloader.models.BookMetadata;
 import com.example.uberv.maptbookapidownloader.models.Chapter;
 import com.example.uberv.maptbookapidownloader.models.Page;
@@ -12,6 +19,10 @@ import com.example.uberv.maptbookapidownloader.models.Section;
 import com.example.uberv.maptbookapidownloader.models.requests.UserCredentials;
 import com.example.uberv.maptbookapidownloader.models.responses.AuthData;
 import com.example.uberv.maptbookapidownloader.models.responses.BaseResponse;
+import com.squareup.picasso.MemoryPolicy;
+import com.squareup.picasso.NetworkPolicy;
+import com.squareup.picasso.Picasso;
+import com.squareup.picasso.Target;
 
 import org.apache.commons.lang3.StringEscapeUtils;
 
@@ -21,6 +32,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.OnClick;
 import retrofit2.Call;
@@ -32,10 +44,26 @@ import static com.example.uberv.maptbookapidownloader.App.getMaptService;
 
 public class MainActivity extends AppCompatActivity {
 
-    private long mBookId = 9781785883309L;
+    public static final String IMAGE_FILENAME_REGEX = "(image.+.jpg)";
+
+    @BindView(R.id.status_tv)
+    TextView mStatusTv;
+    @BindView(R.id.book_id_et)
+    EditText mBookIdEt;
+    @BindView(R.id.email_et)
+    EditText mLoginEt;
+    @BindView(R.id.password_et)
+    EditText mPassEt;
+
+    private long mBookId = 9781785887949L;
     private BookMetadata mBookMetadata;
     private String mAccessToken = null;
+    public final long mSessionId = System.currentTimeMillis();
     private List<Page> mPages;
+    private Pattern mImageFileNamePattern = Pattern.compile(IMAGE_FILENAME_REGEX);
+    private int mEnqueuedImages = 0;
+
+    private List<Target> mTargets = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,24 +73,22 @@ public class MainActivity extends AppCompatActivity {
         AuthenticationUtils.deAuthorize();
         ButterKnife.bind(this);
         Timber.d("HELLO");
+        Picasso.with(MainActivity.this).setLoggingEnabled(true);
+
+        Pair<String, String> credentials = AuthenticationUtils.getCredentials();
+        String email = credentials.first;
+        String pwd = credentials.second;
+
+        if (email != null && pwd != null) {
+            mLoginEt.setText(email);
+            mPassEt.setText(pwd);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         Timber.d("Resumed");
-
-        if (!AuthenticationUtils.isAuthorized()) {
-            mAccessToken = AuthenticationUtils.getAccessToken();
-            Timber.d("Was logged in");
-            fetchMetadata();
-        } else {
-            Timber.d("Not logged in");
-            // TODO add
-            UserCredentials credentials = new UserCredentials("EMAIL", "PASSWORD");
-
-            callAuthenticationService(credentials);
-        }
     }
 
     private void downloadBookPage(String chapterId, String sectionId) {
@@ -91,9 +117,39 @@ public class MainActivity extends AppCompatActivity {
     @OnClick(R.id.login_button)
     void onLoginButtonClicked() {
         Timber.d("Logging in");
+        String mBookIdString = mBookIdEt.getText().toString();
+        if (!TextUtils.isEmpty(mBookIdString)) {
+            mBookId = Long.parseLong(mBookIdString);
+        }
+
+        String email = mLoginEt.getText().toString();
+        String pass = mPassEt.getText().toString();
+        AuthenticationUtils.setCredentials(email, pass);
+
+        if (!AuthenticationUtils.isAuthorized()) {
+            mAccessToken = AuthenticationUtils.getAccessToken();
+            Timber.d("Was logged in");
+            fetchMetadata();
+        } else {
+            Timber.d("Not logged in");
+            // TODO add
+            UserCredentials credentials = new UserCredentials(email, pass);
+
+            callAuthenticationService(credentials);
+        }
+    }
+
+    private void setStatus(final String status) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mStatusTv.setText(status);
+            }
+        });
     }
 
     private void fetchMetadata() {
+        setStatus("Fetching metadata for book #" + mBookId);
         App.getMaptService().getBookMetadata(mBookId)
                 .enqueue(new Callback<BaseResponse<BookMetadata>>() {
                     @Override
@@ -111,6 +167,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startLoadingBook() {
+        setStatus("Starting loading book #" + mBookId);
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -119,30 +176,65 @@ public class MainActivity extends AppCompatActivity {
                 Matcher m;
                 String chapterId;
                 String sectionId;
-                for (Chapter chapter : mBookMetadata.getChapters()) {
-                    for (Section section : chapter.getSections()) {
+                Chapter chapter;
+                Section section;
+                for (int chapterIndex = 0; chapterIndex < mBookMetadata.getChapters().size(); chapterIndex++) {
+                    chapter = mBookMetadata.getChapters().get(chapterIndex);
+                    for (int sectionIndex = 0; sectionIndex < chapter.getSections().size(); sectionIndex++) {
+                        section = chapter.getSections().get(sectionIndex);
                         // TODO add support for first chapter instead of skipping
-                        if (!section.getId().contains("ch")) continue;
+                        // notes: if Sections.seoUrl is not of format d/xyz/xyz, but is X, then it
+                        // is start of chapter url
+                        // https://www.packtpub.com/mapt-rest/users/me/products/9781787124417/chapters/8
+                        // https://www.packtpub.com/mapt-rest/users/me/products/9781787124417/chapters/8/sections/ch08lvl1sec71
 
                         Timber.d("Downloading for section:\n" + section.toString());
                         // Prepare data
                         m = pattern.matcher(section.getSeoUrl());
                         if (m.find()) {
-                            chapterId = m.group();
+                            chapterId = "section/" + m.group();
                         } else {
-                            chapterId = null;
+                            chapterId = "XYZ";
                             Timber.e("Could not find chapter if from seo url at section:\n" + section.toString());
+//                            continue;
+                        }
+                        // TODO replace with regex
+                        if (!chapterId.contains("ch")) {
+                            chapterId = null;
                         }
                         sectionId = section.getId();
+
+                        setStatus(String.format("Chapter %s: '%s'\nSection %s: '%s",
+                                chapterId, chapter.getTitle(), sectionId, section.getTitle()));
+
 //                        downloadBookPage(chapterId, sectionId);
                         try {
                             Response<BaseResponse<Page>> response = App.getMaptService()
-                                    .getBookPage(mBookId, chapterId, sectionId, "Bearer " + mAccessToken)
+                                    .getBookPage(mBookId, chapterId == null ? sectionId : chapterId, chapterId == null ? "" : sectionId, "Bearer " + mAccessToken)
                                     .execute();
+
+
+                            Page page = response.body().getData();
+                            page.setContent(formatPageContent(page.getContent()));
+                            // TODO use JSOP to integrate images
+
                             if (mPages == null) {
                                 mPages = new ArrayList<>();
                             }
-                            mPages.add(response.body().getData());
+                            mPages.add(page);
+
+                            String fileName = String.format("c%d_s%d_%s.html",
+                                    chapterIndex + 1, sectionIndex + 1, section.getTitle().replaceAll("/", "_"));
+                            String htmlText = prepareHtml(page.getContent());
+                            // TODO fetch images
+                            List<String> imageUrls = JsoupParser.parse(htmlText);
+                            for (String imageUrl : imageUrls) {
+                                downloadImage(imageUrl);
+                            }
+                            htmlText = htmlText.replaceAll("/graphics/" + mBookId + "/", "");
+
+                            FileUtils.writeToFile(FileUtils.createBookFile(mBookId + "_" + mSessionId, fileName), htmlText);
+
                             Timber.d("response");
                         } catch (IOException e) {
                             e.printStackTrace();
@@ -153,8 +245,71 @@ public class MainActivity extends AppCompatActivity {
                 }
                 Timber.d("finished");
                 bakeHtmlFiles();
+                setStatus("Finished");
             }
         }).start();
+    }
+
+    private void downloadImage(final String imageUrl) {
+        Timber.d("downloading image at url: " + imageUrl);
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mEnqueuedImages++;
+                String url = Constants.MAPT_GRAPHICS_BASE_URL + imageUrl;
+                Target target = new Target() {
+                    @Override
+                    public void onBitmapLoaded(Bitmap bitmap, Picasso.LoadedFrom from) {
+                        Timber.d("Loaded image at url " + imageUrl);
+                        saveImage(bitmap, imageUrl);
+                        mEnqueuedImages--;
+                    }
+
+                    @Override
+                    public void onBitmapFailed(Drawable errorDrawable) {
+                        Timber.d("Failed loading image at url " + imageUrl);
+                        mEnqueuedImages--;
+                    }
+
+                    @Override
+                    public void onPrepareLoad(Drawable placeHolderDrawable) {
+                    }
+                };
+                mTargets.add(target);
+                Picasso.with(MainActivity.this)
+                        .load(Constants.MAPT_GRAPHICS_BASE_URL + imageUrl)
+                        .memoryPolicy(MemoryPolicy.NO_CACHE)
+                        .networkPolicy(NetworkPolicy.NO_CACHE)
+                        .into(target);
+            }
+        });
+    }
+
+    private void saveImage(Bitmap bitmap, String imageUrl) {
+        Timber.d("saving bitmap for url " + imageUrl);
+        Matcher m = mImageFileNamePattern.matcher(imageUrl);
+        String fileName;
+        if (m.find()) {
+            fileName = m.group();
+            Timber.d("Extracted image file name " + fileName);
+        } else {
+            Timber.d("Could not find image file name at url " + imageUrl);
+            return;
+        }
+        FileUtils.saveImageToFile(bitmap, mBookId + "_" + mSessionId, fileName);
+    }
+
+    private String formatPageContent(String content) {
+        String result;
+        try {
+            result = StringEscapeUtils.unescapeJava(content);
+        } catch (Exception e) {
+            Timber.e(e, "Failed formatting for " + content);
+            result = content;
+        }
+        return result.replace((char) 160, (char) 32)
+                .replace((char) 8211, (char) 45)
+                .replaceAll("…", "...");
     }
 
     private void bakeHtmlFiles() {
@@ -162,11 +317,30 @@ public class MainActivity extends AppCompatActivity {
         for (Page page : mPages) {
             htmlStringBuilder = new StringBuilder();
             htmlStringBuilder.append("<html>");
-            // TODO append styles
+            // TODO append and adjust styles (padding is wrong)
             htmlStringBuilder.append(HtmlUtils.STYLES);
-            htmlStringBuilder.append(StringEscapeUtils.unescapeJava(page.getContent()));
+            // TODO fix escaping problems (?,! and etc results into unreadable characters
+            // TODO or configure converter
+            try {
+                htmlStringBuilder.append(page.getContent());
+            } catch (Exception e) {
+                Timber.e(e);
+                // TODO fix or add some note above "PARSE FAILED"
+                htmlStringBuilder.append(page.getContent());
+            }
             htmlStringBuilder.append("</html>");
         }
+    }
+
+    private String prepareHtml(String data) {
+        StringBuilder htmlStringBuilder;
+        htmlStringBuilder = new StringBuilder();
+        htmlStringBuilder.append("<html>");
+        // TODO append styles
+        htmlStringBuilder.append(HtmlUtils.STYLES);
+        htmlStringBuilder.append(data);
+        htmlStringBuilder.append("</html>");
+        return htmlStringBuilder.toString();
     }
 
     private void callAuthenticationService(UserCredentials credentials) {

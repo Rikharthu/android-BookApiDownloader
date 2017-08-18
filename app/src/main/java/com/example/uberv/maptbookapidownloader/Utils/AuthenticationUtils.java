@@ -3,6 +3,7 @@ package com.example.uberv.maptbookapidownloader.Utils;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.support.annotation.Nullable;
+import android.support.v4.util.Pair;
 import android.text.TextUtils;
 
 public class AuthenticationUtils {
@@ -60,5 +61,13 @@ public class AuthenticationUtils {
                 .putString(ACCESS_TOKEN, accessToken)
                 .putString(REFRESH_TOKEN, refreshToken)
                 .commit();
+    }
+
+    public static void setCredentials(String email, String password) {
+        editAuthPreferences().putString("email", email).putString("password", password).commit();
+    }
+
+    public static Pair<String, String> getCredentials() {
+        return new Pair<>(getAuthPreferences().getString("email", null), getAuthPreferences().getString("password", null));
     }
 }
