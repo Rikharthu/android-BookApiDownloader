@@ -13,6 +13,7 @@ import android.widget.TextView;
 
 import com.example.uberv.maptbookapidownloader.Utils.AuthenticationUtils;
 import com.example.uberv.maptbookapidownloader.Utils.JsoupParser;
+import com.example.uberv.maptbookapidownloader.Utils.Utils;
 import com.example.uberv.maptbookapidownloader.models.BookMetadata;
 import com.example.uberv.maptbookapidownloader.models.Chapter;
 import com.example.uberv.maptbookapidownloader.models.Page;
@@ -48,7 +49,7 @@ public class MainActivity extends AppCompatActivity {
 
     public static final String IMAGE_FILENAME_REGEX = "(image.+.jpg)";
     private static final String ERROR_LOG_FILE_NAME = "ERRORS";
-    private static final long DELAY = 3000;
+    private static final long DELAY = 100;
 
     @BindView(R.id.status_tv)
     TextView mStatusTv;
@@ -223,7 +224,16 @@ public class MainActivity extends AppCompatActivity {
                             Response<BaseResponse<Page>> response = App.getMaptService()
                                     .getBookPage(mBookId, chapterId == null ? sectionId : chapterId, chapterId == null ? "" : sectionId, "Bearer " + mAccessToken)
                                     .execute();
-
+                            while (response.code() == 429) {
+                                Timber.d("ERROR code 429");
+                                Timber.d("Halting for 60 seconds.");
+                                Utils.delay(60000);
+                                Timber.d("Repeating request...");
+                                response = App.getMaptService()
+                                        .getBookPage(mBookId, chapterId == null ? sectionId : chapterId, chapterId == null ? "" : sectionId, "Bearer " + mAccessToken)
+                                        .execute();
+                            }
+                            Timber.d("Request succeeded");
 
                             Page page = response.body().getData();
                             page.setContent(formatPageContent(page.getContent()));
@@ -267,6 +277,10 @@ public class MainActivity extends AppCompatActivity {
                 Timber.d("finished");
                 bakeHtmlFiles();
                 setStatus("Finished");
+
+                String[] files = new String[]{FileUtils.createDirectory(mBookMetadata.getTitle() + "_" + mSessionId).getPath()};
+                // TODO zip
+                FileUtils.zip(files, "ZIP_" + mBookMetadata.getTitle() + "_" + mSessionId);
             }
         }).start();
     }
@@ -318,7 +332,7 @@ public class MainActivity extends AppCompatActivity {
             logError("Could not find image file name at url " + imageUrl);
             return;
         }
-        FileUtils.saveImageToFile(bitmap, mBookId + "_" + mSessionId, fileName);
+        FileUtils.saveImageToFile(bitmap, mBookMetadata.getTitle() + "_" + mSessionId, fileName);
     }
 
     private String formatPageContent(String content) {
