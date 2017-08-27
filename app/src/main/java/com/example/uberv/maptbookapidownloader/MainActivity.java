@@ -8,6 +8,7 @@ import android.support.v7.app.AppCompatActivity;
 import android.text.TextUtils;
 import android.view.WindowManager;
 import android.widget.EditText;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import com.example.uberv.maptbookapidownloader.Utils.AuthenticationUtils;
@@ -26,6 +27,7 @@ import com.squareup.picasso.Target;
 
 import org.apache.commons.lang3.StringEscapeUtils;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,6 +47,8 @@ import static com.example.uberv.maptbookapidownloader.App.getMaptService;
 public class MainActivity extends AppCompatActivity {
 
     public static final String IMAGE_FILENAME_REGEX = "(image.+.jpg)";
+    private static final String ERROR_LOG_FILE_NAME = "ERRORS";
+    private static final long DELAY = 3000;
 
     @BindView(R.id.status_tv)
     TextView mStatusTv;
@@ -54,6 +58,8 @@ public class MainActivity extends AppCompatActivity {
     EditText mLoginEt;
     @BindView(R.id.password_et)
     EditText mPassEt;
+    @BindView(R.id.download_progress)
+    ProgressBar mProgress;
 
     private long mBookId = 9781785887949L;
     private BookMetadata mBookMetadata;
@@ -156,6 +162,11 @@ public class MainActivity extends AppCompatActivity {
                     public void onResponse(Call<BaseResponse<BookMetadata>> call, Response<BaseResponse<BookMetadata>> response) {
                         Timber.d("Response");
                         mBookMetadata = response.body().getData();
+                        int chaptersCount = 0;
+                        for (Chapter chapter : mBookMetadata.getChapters()) {
+                            chaptersCount += chapter.getSections().size();
+                        }
+                        mProgress.setMax(chaptersCount);
                         startLoadingBook();
                     }
 
@@ -233,10 +244,20 @@ public class MainActivity extends AppCompatActivity {
                             }
                             htmlText = htmlText.replaceAll("/graphics/" + mBookId + "/", "");
 
-                            FileUtils.writeToFile(FileUtils.createBookFile(mBookId + "_" + mSessionId, fileName), htmlText);
+                            FileUtils.writeToFile(FileUtils.createBookFile(mBookMetadata.getTitle() + "_" + mSessionId, fileName), htmlText);
+
+                            mProgress.setProgress(mProgress.getProgress() + 1);
 
                             Timber.d("response");
                         } catch (IOException e) {
+                            e.printStackTrace();
+                            logError(e.getMessage());
+                        }
+
+                        // TODO adjust delay to aboid response 429 (too many requests)
+                        try {
+                            Thread.sleep(DELAY);
+                        } catch (InterruptedException e) {
                             e.printStackTrace();
                         }
                     }
@@ -267,7 +288,8 @@ public class MainActivity extends AppCompatActivity {
 
                     @Override
                     public void onBitmapFailed(Drawable errorDrawable) {
-                        Timber.d("Failed loading image at url " + imageUrl);
+//                        Timber.d("Failed loading image at url " + imageUrl);
+                        logError("Failed loading image at url " + imageUrl);
                         mEnqueuedImages--;
                     }
 
@@ -293,7 +315,7 @@ public class MainActivity extends AppCompatActivity {
             fileName = m.group();
             Timber.d("Extracted image file name " + fileName);
         } else {
-            Timber.d("Could not find image file name at url " + imageUrl);
+            logError("Could not find image file name at url " + imageUrl);
             return;
         }
         FileUtils.saveImageToFile(bitmap, mBookId + "_" + mSessionId, fileName);
@@ -304,7 +326,8 @@ public class MainActivity extends AppCompatActivity {
         try {
             result = StringEscapeUtils.unescapeJava(content);
         } catch (Exception e) {
-            Timber.e(e, "Failed formatting for " + content);
+//            Timber.e(e, "Failed formatting for " + content);
+            logError("Failed formatting for " + content + "\n" + e.getMessage());
             result = content;
         }
         return result.replace((char) 160, (char) 32)
@@ -324,7 +347,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 htmlStringBuilder.append(page.getContent());
             } catch (Exception e) {
-                Timber.e(e);
+                logError(e.getMessage());
                 // TODO fix or add some note above "PARSE FAILED"
                 htmlStringBuilder.append(page.getContent());
             }
@@ -341,6 +364,14 @@ public class MainActivity extends AppCompatActivity {
         htmlStringBuilder.append(data);
         htmlStringBuilder.append("</html>");
         return htmlStringBuilder.toString();
+    }
+
+    private void logError(String message) {
+        Timber.d(message);
+        File directory = new File(mBookMetadata.getTitle());
+        directory.mkdir();
+        File file = new File(directory, ERROR_LOG_FILE_NAME);
+        FileUtils.writeToFile(file, message);
     }
 
     private void callAuthenticationService(UserCredentials credentials) {
@@ -361,7 +392,7 @@ public class MainActivity extends AppCompatActivity {
 
                         fetchMetadata();
                     } else {
-                        Timber.d("Authentication request returned no data :(");
+                        logError("Authentication request returned no data :(");
                     }
                 } else {
                     Timber.d("Authentication request failed :(");
@@ -370,7 +401,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onFailure(Call<BaseResponse<AuthData>> call, Throwable t) {
-                Timber.d("Request failed: " + t.getLocalizedMessage());
+                logError("Request failed: " + t.getLocalizedMessage());
             }
         });
     }

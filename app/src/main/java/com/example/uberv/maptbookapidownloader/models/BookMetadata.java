@@ -13,15 +13,21 @@ public class BookMetadata {
     private boolean mIsEarlyAccess;
     @SerializedName("tableOfContents")
     private List<Chapter> mChapters;
+    @SerializedName("imageUrl")
+    private String mImageUrl;
+    @SerializedName("title")
+    private String mTitle;
 
     public BookMetadata() {
     }
 
-    public BookMetadata(int digitalNid, int nid, boolean isEarlyAccess, List<Chapter> chapters) {
-        mDigitalNid = digitalNid;
-        mNid = nid;
-        mIsEarlyAccess = isEarlyAccess;
-        mChapters = chapters;
+    public BookMetadata(int mDigitalNid, int mNid, boolean mIsEarlyAccess, List<Chapter> mChapters, String mImageUrl, String mTitle) {
+        this.mDigitalNid = mDigitalNid;
+        this.mNid = mNid;
+        this.mIsEarlyAccess = mIsEarlyAccess;
+        this.mChapters = mChapters;
+        this.mImageUrl = mImageUrl;
+        this.mTitle = mTitle;
     }
 
     public int getDigitalNid() {
@@ -54,5 +60,21 @@ public class BookMetadata {
 
     public void setChapters(List<Chapter> chapters) {
         mChapters = chapters;
+    }
+
+    public String getImageUrl() {
+        return mImageUrl;
+    }
+
+    public void setImageUrl(String imageUrl) {
+        mImageUrl = imageUrl;
+    }
+
+    public String getTitle() {
+        return mTitle;
+    }
+
+    public void setTitle(String title) {
+        mTitle = title;
     }
 }
